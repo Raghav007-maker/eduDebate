@@ -4,9 +4,11 @@ import asyncio
 from mcp import stdio_client, StdioServerParameters
 from mcp.client.session import ClientSession
 
-# Absolute path of the MCP server script and virtual env Python interpreter
+import sys
+
+# Absolute path of the MCP server script and Python interpreter
 SERVER_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "mcp_server.py"))
-VENV_PYTHON = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "venv", "Scripts", "python.exe"))
+VENV_PYTHON = sys.executable  # Uses whatever Python is running the app
 
 async def query_wikipedia_mcp(query: str) -> str:
     """Spawns the Wikipedia FastMCP server as a subprocess, calls the wikipedia_search tool, and returns results.

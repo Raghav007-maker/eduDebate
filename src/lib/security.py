@@ -27,12 +27,10 @@ def screen_input(user_input: str) -> tuple[bool, str]:
         log_rejection(user_input, reason)
         return False, "Input cannot be empty. Please ask a valid UPSC Polity or Civics question."
         
-    # 2. Single-word or extremely short low-effort inputs
+    # 2. Single-word or extremely short low-effort inputs - reframe instead of rejecting
     words = cleaned.split()
     if len(words) <= 1 or len(cleaned) < 10:
-        reason = "Single word or too short (low effort)"
-        log_rejection(user_input, reason)
-        return False, "Your question is too short or low-effort. Please provide a descriptive UPSC Polity question."
+        cleaned = f"Explain the concept of '{cleaned}' in the context of UPSC Polity and Indian Civics."
 
     # 3. Prompt injection patterns
     injection_patterns = [

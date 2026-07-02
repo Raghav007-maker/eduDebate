@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 from src.agents.workflow import create_debate_workflow
 from src.lib.security import screen_input
 from src.lib.db import save_debate, get_past_debates
-from src.test_manual import mock_generate_content_async
+from src.lib.mock import mock_generate_content_async
 
 # Load environment variables
 load_dotenv()
@@ -193,8 +193,41 @@ def parse_factcheck_json(text: str) -> list:
                 clean_text = clean_text.replace("```json", "").replace("```", "").strip()
         return json.loads(clean_text)
     except Exception:
-        # Fallback parsing line by line or returning empty list
         return []
+
+# Helper function to render step progress
+def render_stepper(active_step: int):
+    """Renders a 4-step progress indicator. active_step: 0=none, 1-4=which agent is running, 5=completed."""
+    steps = [
+        ("Research", "Claims gathered"),
+        ("Challenge", "Tensions surfaced"),
+        ("Verify", "Checking claims..."),
+        ("Synthesise", "Final note"),
+    ]
+    html = '<div style="display:flex;align-items:center;gap:4px;padding:10px 16px;background:rgba(255,255,255,0.03);border-radius:8px;border:1px solid rgba(255,255,255,0.08);margin-bottom:16px;">'
+    for i, (name, sub) in enumerate(steps, 1):
+        if i < active_step or active_step == 5:
+            circle = "✓"
+            color = "#2ecc71"
+            sub_text = "Done" if active_step == 5 or i < active_step else sub
+        elif i == active_step:
+            circle = str(i)
+            color = "#00d2ff"
+            sub_text = sub
+        else:
+            circle = str(i)
+            color = "rgba(255,255,255,0.2)"
+            sub_text = "Pending"
+        
+        html += f'''<div style="display:flex;align-items:center;gap:8px;flex:1;">
+            <div style="width:26px;height:26px;border-radius:50%;border:1.5px solid {color};display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:{color};flex-shrink:0;">{circle}</div>
+            <div style="font-size:11px;color:{color};line-height:1.3;"><span style="font-weight:600;display:block;">{name}</span><span style="opacity:0.7;font-size:10px;">{sub_text}</span></div>
+        </div>'''
+        if i < 4:
+            divider_color = "#2ecc71" if (i < active_step or active_step == 5) else "rgba(255,255,255,0.1)"
+            html += f'<div style="width:20px;height:1px;background:{divider_color};flex-shrink:0;"></div>'
+    html += '</div>'
+    return html
 
 # Sidebar Session/History and Config Panel
 with st.sidebar:
@@ -222,7 +255,6 @@ with st.sidebar:
     
     if past_runs:
         for run in past_runs:
-            # Display truncated question as button text
             q_text = run["question"]
             btn_label = q_text[:35] + "..." if len(q_text) > 35 else q_text
             if st.button(btn_label, key=f"hist_{run['id']}", use_container_width=True):
@@ -234,6 +266,9 @@ with st.sidebar:
 if "current_debate" not in st.session_state:
     st.session_state.current_debate = None
 
+if "input_value" not in st.session_state:
+    st.session_state.input_value = ""
+
 if selected_debate:
     st.session_state.current_debate = selected_debate
 
@@ -244,7 +279,8 @@ with col_input:
     user_query = st.text_input(
         "Ask a UPSC Polity or Civics question:",
         placeholder="e.g., Explain the significance of the Basic Structure Doctrine.",
-        key="question_input"
+        key="question_input",
+        value=st.session_state.input_value
     )
 
 with col_info:
@@ -255,6 +291,7 @@ with col_info:
 # Run new workflow if button clicked
 if submit_button and user_query:
     st.session_state.current_debate = None # Reset selected history
+    st.session_state.input_value = ""      # Clear state value to prevent sticky inputs
     
     # 1. Run Pre-LLM Security Screening
     is_safe, screening_msg = screen_input(user_query)
@@ -264,9 +301,17 @@ if submit_button and user_query:
     else:
         st.info(f"Question verified. Spawning Socratic debate for: *{screening_msg}*")
         
-        # UI Placeholders for streaming output
-        r_card = st.empty()
-        a_card = st.empty()
+        # Stepper placeholder at the top
+        stepper_ph = st.empty()
+        stepper_ph.markdown(render_stepper(1), unsafe_allow_html=True)
+        
+        # Side-by-side columns for Research vs Devil's Advocate
+        debate_cols = st.columns(2)
+        with debate_cols[0]:
+            r_card = st.empty()
+        with debate_cols[1]:
+            a_card = st.empty()
+            
         f_card = st.empty()
         s_card = st.empty()
         
@@ -293,14 +338,12 @@ if submit_button and user_query:
             parts=[types.Part(text=screening_msg)]
         )
         
-        # Standard Wikipedia context state delta
         state_delta = {
             "wikipedia_context": f"Wikipedia context: UPSC Polity context search for {screening_msg}"
         }
         
         async def run_agents():
             if not api_mode:
-                # Mock Mode Patching
                 target = "google.adk.models.google_llm.Gemini.generate_content_async"
                 with patch(target, side_effect=mock_generate_content_async, autospec=True):
                     return runner.run(
@@ -318,91 +361,99 @@ if submit_button and user_query:
                 )
         
         try:
-            with st.spinner("Agents are debating... Please wait."):
-                events = asyncio.run(run_agents())
-                for ev in events:
-                    author = ev.author
-                    if author in agent_texts:
-                        text_chunk = ""
-                        if ev.content and ev.content.parts:
-                            for part in ev.content.parts:
-                                if part.text:
-                                    text_chunk += part.text
-                        
-                        agent_texts[author] += text_chunk
-                        
-                        # Dynamically render individual panels as they update
-                        if author == "ResearchAgent":
-                            r_card.markdown(f"""
-                            <div class="glass-card research-theme">
-                                <div class="agent-header">
-                                    <span class="agent-badge research-badge">Research Agent</span>
-                                    <span class="agent-name">Initial Deconstruction & Source Citations</span>
-                                </div>
-                                <div>{agent_texts[author]}</div>
-                            </div>
-                            """, unsafe_allow_html=True)
-                            
-                        elif author == "DevilsAdvocate":
-                            a_card.markdown(f"""
-                            <div class="glass-card advocate-theme">
-                                <div class="agent-header">
-                                    <span class="agent-badge advocate-badge">Devil's Advocate</span>
-                                    <span class="agent-name">Interpretation & Historiographical Challenge</span>
-                                </div>
-                                <div>{agent_texts[author]}</div>
-                            </div>
-                            """, unsafe_allow_html=True)
-                            
-                        elif author == "FactCheck":
-                            # Parse JSON to construct a premium verdict list
-                            claims_list = parse_factcheck_json(agent_texts[author])
-                            if claims_list:
-                                html_content = ""
-                                for item in claims_list:
-                                    v = item.get("verdict", "Unverified").strip().lower()
-                                    badge_class = "verified" if v == "verified" else "unverified" if v == "unverified" else "disputed"
-                                    card_class = f"verdict-{badge_class}"
-                                    
-                                    html_content += f"""
-                                    <div class="verdict-card {card_class}">
-                                        <div class="verdict-lbl {badge_class}">{v}</div>
-                                        <div class="claim-text">Claim: "{item.get('claim', '')}"</div>
-                                        <div class="reason-text">Reason: {item.get('reason', '')}</div>
-                                    </div>
-                                    """
-                                f_card.markdown(f"""
-                                <div class="glass-card factcheck-theme">
-                                    <div class="agent-header">
-                                        <span class="agent-badge factcheck-badge">Fact Checker</span>
-                                        <span class="agent-name">MCP Wikipedia-sourced Verification Verdicts</span>
-                                    </div>
-                                    {html_content}
-                                </div>
-                                """, unsafe_allow_html=True)
-                            else:
-                                f_card.markdown(f"""
-                                <div class="glass-card factcheck-theme">
-                                    <div class="agent-header">
-                                        <span class="agent-badge factcheck-badge">Fact Checker</span>
-                                        <span class="agent-name">MCP Wikipedia-sourced Verification Verdicts</span>
-                                    </div>
-                                    <pre style="white-space: pre-wrap;">{agent_texts[author]}</pre>
-                                </div>
-                                """, unsafe_allow_html=True)
-                                
-                        elif author == "Synthesis":
-                            s_card.markdown(f"""
-                            <div class="glass-card synthesis-theme">
-                                <div class="agent-header">
-                                    <span class="agent-badge synthesis-badge">Synthesis Note</span>
-                                    <span class="agent-name">Final UPSC Polity Revision Card</span>
-                                </div>
-                                <div>{agent_texts[author]}</div>
-                            </div>
-                            """, unsafe_allow_html=True)
+            # Avoid asyncio.run loop errors in Streamlit
+            loop = asyncio.new_event_loop()
+            events = loop.run_until_complete(run_agents())
             
-            # Save the successfully generated run into SQLite
+            step_map = {"ResearchAgent": 1, "DevilsAdvocate": 2, "FactCheck": 3, "Synthesis": 4}
+            
+            for ev in events:
+                author = ev.author
+                if author in step_map:
+                    stepper_ph.markdown(render_stepper(step_map[author]), unsafe_allow_html=True)
+                
+                if author in agent_texts:
+                    text_chunk = ""
+                    if ev.content and ev.content.parts:
+                        for part in ev.content.parts:
+                            if part.text:
+                                text_chunk += part.text
+                    
+                    agent_texts[author] += text_chunk
+                    
+                    if author == "ResearchAgent":
+                        r_card.markdown(f"""
+                        <div class="glass-card research-theme">
+                            <div class="agent-header">
+                                <span class="agent-badge research-badge">Research Agent</span>
+                                <span class="agent-name">Initial Deconstruction & Source Citations</span>
+                            </div>
+                            <div style="white-space: pre-wrap;">{agent_texts[author]}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                    elif author == "DevilsAdvocate":
+                        a_card.markdown(f"""
+                        <div class="glass-card advocate-theme">
+                            <div class="agent-header">
+                                <span class="agent-badge advocate-badge">Devil's Advocate</span>
+                                <span class="agent-name">Interpretation & Historiographical Challenge</span>
+                            </div>
+                            <div style="white-space: pre-wrap;">{agent_texts[author]}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                    elif author == "FactCheck":
+                        claims_list = parse_factcheck_json(agent_texts[author])
+                        if claims_list:
+                            html_content = ""
+                            for item in claims_list:
+                                v = item.get("verdict", "Unverified").strip().lower()
+                                badge_class = "verified" if v == "verified" else "unverified" if v == "unverified" else "disputed"
+                                card_class = f"verdict-{badge_class}"
+                                
+                                html_content += f"""
+                                <div class="verdict-card {card_class}">
+                                    <div class="verdict-lbl {badge_class}">{v}</div>
+                                    <div class="claim-text">Claim: "{item.get('claim', '')}"</div>
+                                    <div class="reason-text">Reason: {item.get('reason', '')}</div>
+                                </div>
+                                """
+                            f_card.markdown(f"""
+                            <div class="glass-card factcheck-theme">
+                                <div class="agent-header">
+                                    <span class="agent-badge factcheck-badge">Fact Checker</span>
+                                    <span class="agent-name">MCP Wikipedia-sourced Verification Verdicts</span>
+                                </div>
+                                {html_content}
+                            </div>
+                            """, unsafe_allow_html=True)
+                        else:
+                            f_card.markdown(f"""
+                            <div class="glass-card factcheck-theme">
+                                <div class="agent-header">
+                                    <span class="agent-badge factcheck-badge">Fact Checker</span>
+                                    <span class="agent-name">MCP Wikipedia-sourced Verification Verdicts</span>
+                                </div>
+                                <pre style="white-space: pre-wrap;">{agent_texts[author]}</pre>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+                    elif author == "Synthesis":
+                        s_card.markdown(f"""
+                        <div class="glass-card synthesis-theme">
+                            <div class="agent-header">
+                                <span class="agent-badge synthesis-badge">Synthesis Note</span>
+                                <span class="agent-name">Final UPSC Polity Revision Card</span>
+                            </div>
+                            <div style="white-space: pre-wrap;">{agent_texts[author]}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+            
+            loop.close()
+            stepper_ph.markdown(render_stepper(5), unsafe_allow_html=True)
+            
+            # Save debate session
             save_debate(
                 question=screening_msg,
                 research_output=agent_texts["ResearchAgent"],
@@ -411,37 +462,43 @@ if submit_button and user_query:
                 synthesis_output=agent_texts["Synthesis"]
             )
             st.success("Debate finalized and saved to your history sidebar!")
-            st.rerun() # Refresh history in sidebar
+            st.rerun()
             
         except Exception as e:
             st.error(f"An error occurred during debate simulation: {str(e)}")
 
-# Render selected past debate or a default greeting
+# Render selected past debate or a default greeting with clickable chips
 if st.session_state.current_debate:
     run = st.session_state.current_debate
     st.markdown(f"### Historical Debate Session: *{run['question']}*")
     st.caption(f"Saved on {run['timestamp']}")
     
-    # Render saved card components
-    st.markdown(f"""
-    <div class="glass-card research-theme">
-        <div class="agent-header">
-            <span class="agent-badge research-badge">Research Agent</span>
-            <span class="agent-name">Initial Deconstruction & Source Citations</span>
-        </div>
-        <div style="white-space: pre-wrap;">{run['research_output']}</div>
-    </div>
-    """, unsafe_allow_html=True)
+    # Stepper in complete state for loaded debates
+    st.markdown(render_stepper(5), unsafe_allow_html=True)
     
-    st.markdown(f"""
-    <div class="glass-card advocate-theme">
-        <div class="agent-header">
-            <span class="agent-badge advocate-badge">Devil's Advocate</span>
-            <span class="agent-name">Interpretation & Historiographical Challenge</span>
+    # Side-by-side columns layout
+    saved_cols = st.columns(2)
+    with saved_cols[0]:
+        st.markdown(f"""
+        <div class="glass-card research-theme">
+            <div class="agent-header">
+                <span class="agent-badge research-badge">Research Agent</span>
+                <span class="agent-name">Initial Deconstruction & Source Citations</span>
+            </div>
+            <div style="white-space: pre-wrap;">{run['research_output']}</div>
         </div>
-        <div style="white-space: pre-wrap;">{run['advocate_output']}</div>
-    </div>
-    """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
+        
+    with saved_cols[1]:
+        st.markdown(f"""
+        <div class="glass-card advocate-theme">
+            <div class="agent-header">
+                <span class="agent-badge advocate-badge">Devil's Advocate</span>
+                <span class="agent-name">Interpretation & Historiographical Challenge</span>
+            </div>
+            <div style="white-space: pre-wrap;">{run['advocate_output']}</div>
+        </div>
+        """, unsafe_allow_html=True)
     
     # Fact Check verdicts
     claims_list = parse_factcheck_json(run['factcheck_output'])
@@ -488,5 +545,45 @@ if st.session_state.current_debate:
         <div style="white-space: pre-wrap;">{run['synthesis_output']}</div>
     </div>
     """, unsafe_allow_html=True)
+    
+    # Export options for Study Note
+    if run['synthesis_output']:
+        col_copy, col_save, _ = st.columns([1, 1, 4])
+        with col_copy:
+            st.button(
+                "📋 Copy note", 
+                key="copy_btn", 
+                help="Copy synthesis to clipboard",
+                on_click=lambda: st.write(
+                    f'<script>navigator.clipboard.writeText(`{run["synthesis_output"]}`)</script>',
+                    unsafe_allow_html=True
+                )
+            )
+        with col_save:
+            st.download_button(
+                "⬇ Save note", 
+                data=run['synthesis_output'],
+                file_name=f"edudebate_{run['question'][:20].replace(' ','_')}.txt",
+                mime="text/plain",
+                key="download_btn"
+            )
+
 elif not user_query:
-    st.info("Submit a UPSC Polity question or select a past session from the sidebar to view.")
+    # Chips / Interactive Example Questions
+    st.markdown("""
+    <div style="text-align:center;padding:30px 0 10px;">
+        <div style="font-size:1.1rem;font-weight:600;color:rgba(255,255,255,0.7);margin-bottom:8px;">Try asking about...</div>
+    </div>""", unsafe_allow_html=True)
+    
+    examples = [
+        "Was the Basic Structure Doctrine a judicial overreach?",
+        "Explain the Governor's discretionary powers under Article 163.",
+        "How did Article 370 reflect asymmetric federalism in India?",
+        "Was the 42nd Amendment a threat to Indian democracy?"
+    ]
+    cols = st.columns(2)
+    for i, q in enumerate(examples):
+        with cols[i % 2]:
+            if st.button(q, key=f"ex_{i}", use_container_width=True):
+                st.session_state.input_value = q
+                st.rerun()

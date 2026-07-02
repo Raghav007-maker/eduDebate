@@ -3,3 +3,4 @@ streamlit
 wikipedia-api
 fastmcp
 python-dotenv
+google-genai
