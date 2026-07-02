@@ -1,0 +1,5 @@
+google-adk
+streamlit
+wikipedia-api
+fastmcp
+python-dotenv
