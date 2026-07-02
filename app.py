@@ -266,8 +266,8 @@ with st.sidebar:
 if "current_debate" not in st.session_state:
     st.session_state.current_debate = None
 
-if "input_value" not in st.session_state:
-    st.session_state.input_value = ""
+if "question_input" not in st.session_state:
+    st.session_state.question_input = ""
 
 if selected_debate:
     st.session_state.current_debate = selected_debate
@@ -279,8 +279,7 @@ with col_input:
     user_query = st.text_input(
         "Ask a UPSC Polity or Civics question:",
         placeholder="e.g., Explain the significance of the Basic Structure Doctrine.",
-        key="question_input",
-        value=st.session_state.input_value
+        key="question_input"
     )
 
 with col_info:
@@ -291,7 +290,7 @@ with col_info:
 # Run new workflow if button clicked
 if submit_button and user_query:
     st.session_state.current_debate = None # Reset selected history
-    st.session_state.input_value = ""      # Clear state value to prevent sticky inputs
+    st.session_state.question_input = ""      # Clear state value to prevent sticky inputs
     
     # 1. Run Pre-LLM Security Screening
     is_safe, screening_msg = screen_input(user_query)
@@ -585,5 +584,5 @@ elif not user_query:
     for i, q in enumerate(examples):
         with cols[i % 2]:
             if st.button(q, key=f"ex_{i}", use_container_width=True):
-                st.session_state.input_value = q
+                st.session_state.question_input = q
                 st.rerun()
