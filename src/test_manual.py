@@ -20,7 +20,7 @@ async def test_run():
     load_dotenv()
     api_key_present = "GEMINI_API_KEY" in os.environ and os.environ["GEMINI_API_KEY"].strip() != ""
 
-    workflow = create_debate_workflow()
+    workflow = create_debate_workflow(model_lite="gemini-3.1-flash-lite", model_standard="gemini-3.5-flash")
     session_service = InMemorySessionService()
     runner = adk.Runner(
         agent=workflow,
@@ -43,13 +43,13 @@ async def test_run():
         print("--- GEMINI_API_KEY NOT FOUND: RUNNING IN MOCK MODE ---")
         target = "google.adk.models.google_llm.Gemini.generate_content_async"
         with patch(target, side_effect=mock_generate_content_async, autospec=True):
-            events = runner.run(
+            events = runner.run_async(
                 user_id="user_1",
                 session_id="session_1",
                 new_message=new_message,
                 state_delta=state_delta
             )
-            for ev in events:
+            async for ev in events:
                 print(f"\n[{ev.author or 'System'}] Event:")
                 if ev.content:
                     for part in ev.content.parts:
@@ -57,13 +57,13 @@ async def test_run():
                             print(part.text)
     else:
         print("--- GEMINI_API_KEY FOUND: RUNNING REAL LLM DEBATE ---")
-        events = runner.run(
+        events = runner.run_async(
             user_id="user_1",
             session_id="session_1",
             new_message=new_message,
             state_delta=state_delta
         )
-        for ev in events:
+        async for ev in events:
             print(f"\n[{ev.author or 'System'}] Event:")
             if ev.content:
                 for part in ev.content.parts:

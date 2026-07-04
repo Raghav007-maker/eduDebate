@@ -1,4 +1,5 @@
 import os
+import asyncio
 from google.adk.agents import LlmAgent, SequentialAgent
 from google.adk.sessions import InMemorySessionService
 from google.adk import Runner
@@ -13,13 +14,12 @@ from src.lib.mcp_client import query_wikipedia_mcp
 
 async def wikipedia_search(query: str) -> str:
     """Searches Wikipedia for a given UPSC Polity/Civics topic via MCP subprocess."""
+    # Add a 1.5-second pacing delay to respect Gemini Free Tier rate limits (15 RPM)
+    await asyncio.sleep(1.5)
     return await query_wikipedia_mcp(query)
 
-def create_debate_workflow() -> SequentialAgent:
+def create_debate_workflow(model_lite: str = "gemini-2.5-flash-lite", model_standard: str = "gemini-2.5-flash") -> SequentialAgent:
     """Creates and configures the sequential multi-agent debate pipeline."""
-    # Define model assignments based on project constraints
-    model_lite = "gemini-2.5-flash-lite"
-    model_standard = "gemini-2.5-flash"
 
     # Agent 1: Research Agent (uses flash-lite, decomposes topic, queries source via MCP)
     research_agent = LlmAgent(
